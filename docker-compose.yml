@@ -1,0 +1,74 @@
+# ==============================================================================
+# Docker Compose de Developpement — Telixia (Projet Federateur AI-BD_BI)
+# Base : template fourni par l'enseignant, adapte au projet (voir README)
+# Services : Qdrant (base vectorielle HNSW, hybride dense+sparse) & PostgreSQL 16
+# ==============================================================================
+
+name: telixia
+
+services:
+  # ----------------------------------------------------------------------------
+  # Base de Donnees Vectorielle Dediee : Qdrant
+  # v1.13 (>= 1.10 requis pour la recherche hybride dense+sparse avec fusion RRF)
+  # ----------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_VERSION:-v1.13.0}
+    container_name: telixia-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-6333}:6333" # API REST et Dashboard Web (localhost uniquement)
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334" # API gRPC haute performance
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__ENABLE_STATIC_CONTENT=true
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:?QDRANT_API_KEY manquant dans .env}
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e \"GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"200 OK\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ----------------------------------------------------------------------------
+  # Base de Donnees Relationnelle : PostgreSQL 16
+  # Donnees clients (IBM), catalogue d'offres, KPI marche, registre documentaire,
+  # journal d'audit SQL. Schemas + role lecture seule crees au 1er demarrage.
+  # ----------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: telixia-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER manquant dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB manquant dans .env}
+      TELIXIA_RO_PASSWORD: ${TELIXIA_RO_PASSWORD:?TELIXIA_RO_PASSWORD manquant dans .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# ------------------------------------------------------------------------------
+# Volumes & Reseau
+# ------------------------------------------------------------------------------
+volumes:
+  qdrant_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  backend-net:
+    driver: bridge
