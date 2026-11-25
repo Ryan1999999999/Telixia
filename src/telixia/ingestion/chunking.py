@@ -29,7 +29,7 @@ RC = {"RC"}
 ARTICLE_HEADING = re.compile(r"^(article|art\.)\s*(\d+(?:\.\d+)*)\s*[.\-\u2013:)]?\s*(.*)$", re.I)
 RC_HEADING = re.compile(
     r"^(services et \u00e9quipements|\u00e9quipements\b.*|d\u00e9bits? du service.*|prix\b.*"
-    r"|dur\u00e9e,? renouvellement et r\u00e9siliation.*|fonctionnalit\u00e9s pour les utilisateurs finaux.*"
+    r"|dur\u00e9e,? renouvellement,? (?:et )?r\u00e9siliation.*|fonctionnalit\u00e9s pour les utilisateurs finaux.*"
     r"|autres informations utiles.*)$",
     re.I,
 )
@@ -38,6 +38,7 @@ DATE = re.compile(
     r"\s*:?\s*(\d{1,2})[/.](\d{1,2})[/.](\d{4})",
     re.I,
 )
+CAPTION_TOKENS = 30        # a text this short just before a table is its caption
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+(?=[A-Z\u00c0-\u00d6\u00d8-\u00dd0-9\u25a0\u2022\-(\"])")
 
 
@@ -109,7 +110,8 @@ def split_sections(blocks: list[Block], family: str) -> list[Section]:
                     paragraph = []
                 current = start(title, b.page)
                 just_started = True
-            elif just_started and len(line.split()) <= 3 and not line.endswith((".", ":")):
+            elif (family == "legal" and just_started and len(line.split()) <= 3
+                  and not line.endswith((".", ":"))):
                 current.title = f"{current.title} {line}"     # heading wrapped on 2 lines
                 just_started = False
             else:
@@ -186,9 +188,13 @@ def pack(units: list[tuple[str, str]], budget: int, overlap: int,
 
     for kind, text in atoms:
         if kind == "table":
-            flush()
+            caption = ""
+            if buf and count(" ".join(buf)) <= CAPTION_TOKENS:   # e.g. "Tarifs par mois"
+                caption = " ".join(buf) + "\n"
+            else:
+                flush()
             buf = []
-            chunks.append(("table", text))
+            chunks.append(("table", caption + text))
             continue
         if buf and count(" ".join(buf + [text])) > budget:
             flush()

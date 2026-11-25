@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from telixia.ingestion.chunking import (  # noqa: E402
     family_of, find_publication_date, make_parents, pack, split_sections, units_to_text,
 )
-from telixia.ingestion.pdf_extract import extract_blocks  # noqa: E402
+from telixia.ingestion.pdf_extract import Block, extract_blocks  # noqa: E402
 
 MANIFEST = ROOT / "data" / "raw" / "docs" / "manifest.csv"
 OUT = ROOT / "data" / "processed"
@@ -36,6 +36,7 @@ CHILD_TOKENS = 256
 OVERLAP_TOKENS = 40
 PARENT_TOKENS = 1024
 BOILERPLATE_MIN_WORDS = 12          # short blocks (headings like "Prix") are never removed
+BOILERPLATE_LINE_WORDS = 8          # repeated lines this long or longer are boilerplate too
 BOILERPLATE_DOC_SHARE = 0.3         # block found in >= 30% of the docs of a type -> boilerplate
 
 CATEGORY = {"TARIFS": "tarif", "ASSURANCE": "assurance", "FORMULAIRE": "formulaire"}
@@ -96,6 +97,17 @@ def main() -> None:
         key for key, ids in seen_in.items()
         if docs_per_type[key[0]] >= 5 and len(ids) / docs_per_type[key[0]] >= BOILERPLATE_DOC_SHARE
     }
+    line_seen = defaultdict(set)
+    for doc_id, (d, blocks, _) in extracted.items():
+        for b in blocks:
+            if b.kind == "text":
+                for line in b.text.split("\n"):
+                    if len(line.split()) >= BOILERPLATE_LINE_WORDS:
+                        line_seen[(d["doc_type"], signature(line))].add(doc_id)
+    boilerplate_lines = {
+        key for key, ids in line_seen.items()
+        if docs_per_type[key[0]] >= 5 and len(ids) / docs_per_type[key[0]] >= BOILERPLATE_DOC_SHARE
+    }
     kept_once: set = set()
 
     # ---- pass 3: sections -> parents -> children --------------------------------------
@@ -115,6 +127,19 @@ def main() -> None:
                         stats[doc_type]["boilerplate_removed"] += 1
                         continue
                     kept_once.add(key)
+                if b.kind == "text":
+                    lines = []
+                    for line in b.text.split("\n"):
+                        lkey = (doc_type, signature(line))
+                        if len(line.split()) >= BOILERPLATE_LINE_WORDS and lkey in boilerplate_lines:
+                            if lkey in kept_once:
+                                stats[doc_type]["boilerplate_lines"] += 1
+                                continue
+                            kept_once.add(lkey)
+                        lines.append(line)
+                    if not lines:
+                        continue
+                    b = Block(b.page, b.kind, "\n".join(lines))
                 clean.append(b)
 
             family = family_of(doc_type)
@@ -177,7 +202,8 @@ def main() -> None:
               f"{s['chunks']:>8}{s['table_chunks']:>7}{avg:>8.0f}{s['boilerplate_removed']:>8}")
         tot.update(s)
     print(f"\nTOTAL: {tot['docs']} docs -> {tot['parents']} parents -> {tot['chunks']} chunks "
-          f"({tot['table_chunks']} tables), {tot['boilerplate_removed']} boilerplate blocks removed")
+          f"({tot['table_chunks']} tables), {tot['boilerplate_removed']} boilerplate blocks"
+          f" + {tot['boilerplate_lines']} boilerplate lines removed")
     print(f"Output: {(OUT / 'parents.jsonl').relative_to(ROOT)}, {(OUT / 'chunks.jsonl').relative_to(ROOT)}")
 
 
