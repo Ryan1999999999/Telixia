@@ -36,6 +36,7 @@ from qdrant_client import QdrantClient, models  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
 from telixia.core.config import get_settings  # noqa: E402
+from telixia.core.embedding_cache import EmbeddingCache, seed_from_qdrant  # noqa: E402
 from telixia.core.embeddings import Embedder  # noqa: E402
 
 warnings.filterwarnings("ignore", message="Api key is used with an insecure connection")
@@ -56,7 +57,7 @@ def run_step(script: str) -> None:
     subprocess.run([sys.executable, str(ROOT / "scripts" / script)], check=True)
 
 
-def prepare_inputs(force_rebuild: bool) -> None:
+def prepare_inputs(force_rebuild: bool) -> bool:
     """Makes sure the PDFs and the chunk files exist and are up to date."""
     manifest = ROOT / "data" / "raw" / "docs" / "manifest.csv"
     chunks = PROCESSED / "chunks.jsonl"
@@ -75,8 +76,9 @@ def prepare_inputs(force_rebuild: bool) -> None:
         reason = "forced" if force_rebuild else "chunks missing or older than the corpus/chunking code"
         print(f"Building chunks ({reason}).")
         run_step("build_chunks.py")
-    else:
-        print("Chunks are up to date (use --rebuild to force).")
+        return True
+    print("Chunks are up to date (use --rebuild to force).")
+    return False
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -111,27 +113,37 @@ def ensure_collection(client: QdrantClient, dim: int, recreate: bool) -> None:
     client.create_payload_index(COLLECTION, "is_synthetic", models.PayloadSchemaType.BOOL)
 
 
-def index_chunks(client: QdrantClient, embedder: Embedder, chunks: list[dict]) -> None:
+def index_chunks(client: QdrantClient, settings, cache: EmbeddingCache, chunks: list[dict]) -> None:
+    """Encodes only the chunks missing from the cache, then upserts every chunk."""
     start = time.time()
-    with tqdm(total=len(chunks), desc="embed+upsert", unit="chunk") as bar:
+    missing = [c for c in chunks if cache.get(c["embed_text"]) is None]
+    print(f"{len(chunks)} chunks: {len(chunks) - len(missing)} vectors from cache, {len(missing)} to encode")
+    if missing:
+        print(f"Loading {settings.embedding_model}...")
+        embedder = Embedder(settings.embedding_model)
+        print(f"Model on {embedder.device}")
+        with tqdm(total=len(missing), desc="encode", unit="chunk") as bar:
+            for i in range(0, len(missing), UPSERT_BATCH):
+                batch = missing[i:i + UPSERT_BATCH]
+                enc = embedder.encode([c["embed_text"] for c in batch], batch_size=EMBED_BATCH)
+                cache.put_many([(c["embed_text"], e.dense, e.sparse_indices, e.sparse_values)
+                                for c, e in zip(batch, enc)])
+                bar.update(len(batch))
+    with tqdm(total=len(chunks), desc="upsert", unit="chunk") as bar:
         for i in range(0, len(chunks), UPSERT_BATCH):
             batch = chunks[i:i + UPSERT_BATCH]
-            encoded = embedder.encode([c["embed_text"] for c in batch], batch_size=EMBED_BATCH)
-            points = [
-                models.PointStruct(
+            points = []
+            for c in batch:
+                dense, idx, val = cache.get(c["embed_text"])
+                points.append(models.PointStruct(
                     id=c["id"],
-                    vector={
-                        "dense": e.dense,
-                        "sparse": models.SparseVector(indices=e.sparse_indices, values=e.sparse_values),
-                    },
+                    vector={"dense": dense, "sparse": models.SparseVector(indices=idx, values=val)},
                     payload={k: v for k, v in c.items() if k not in PAYLOAD_DROP},
-                )
-                for c, e in zip(batch, encoded)
-            ]
+                ))
             client.upsert(COLLECTION, points=points, wait=True)
             bar.update(len(batch))
     elapsed = time.time() - start
-    print(f"{len(chunks)} chunks indexed in {elapsed:.0f}s ({len(chunks) / elapsed:.1f} chunks/s)")
+    print(f"{len(chunks)} chunks indexed in {elapsed:.0f}s ({len(missing)} encoded)")
 
 
 # ------------------------------------------------------------------------- PostgreSQL
@@ -201,7 +213,7 @@ def main() -> None:
     ap.add_argument("--rebuild", action="store_true", help="force the chunking step")
     args = ap.parse_args()
 
-    prepare_inputs(args.rebuild)
+    rebuilt = prepare_inputs(args.rebuild)
     settings = get_settings()
     chunks = load_jsonl(PROCESSED / "chunks.jsonl")
     parents = load_jsonl(PROCESSED / "parents.jsonl")
@@ -213,12 +225,14 @@ def main() -> None:
 
     client = QdrantClient(url=settings.qdrant_url,
                           api_key=settings.qdrant_api_key.get_secret_value(), timeout=120)
-    ensure_collection(client, settings.embedding_dim, args.recreate)
-
-    print(f"Loading {settings.embedding_model} (first run downloads ~2.3 GB)...")
-    embedder = Embedder(settings.embedding_model)
-    print(f"Model on {embedder.device}")
-    index_chunks(client, embedder, chunks)
+    cache = EmbeddingCache(PROCESSED / "embedding_cache.sqlite")
+    synced = seed_from_qdrant(client, cache, COLLECTION)     # before a recreate deletes them
+    print(f"Embedding cache: {cache.size()} vectors ({synced} synced from '{COLLECTION}')")
+    recreate = args.recreate or (rebuilt and not args.limit)
+    if recreate and not args.recreate:
+        print("Chunks were rebuilt: recreating the collection so no stale point remains.")
+    ensure_collection(client, settings.embedding_dim, recreate)
+    index_chunks(client, settings, cache, chunks)
 
     info = client.get_collection(COLLECTION)
     print(f"\nCollection '{COLLECTION}': {info.points_count} points, status {info.status}")

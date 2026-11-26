@@ -27,6 +27,7 @@ from telixia.ingestion.chunking import (  # noqa: E402
     family_of, find_publication_date, make_parents, pack, split_sections, units_to_text,
 )
 from telixia.ingestion.pdf_extract import Block, extract_blocks  # noqa: E402
+from telixia.ingestion.quality import detect_language, low_quality_reason  # noqa: E402
 
 MANIFEST = ROOT / "data" / "raw" / "docs" / "manifest.csv"
 OUT = ROOT / "data" / "processed"
@@ -63,7 +64,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--model", default="BAAI/bge-m3")
+    ap.add_argument("--child-tokens", type=int, default=CHILD_TOKENS, help="child chunk size (searched)")
+    ap.add_argument("--overlap", type=int, default=OVERLAP_TOKENS, help="overlap between children")
+    ap.add_argument("--parent-tokens", type=int, default=PARENT_TOKENS, help="parent size (LLM context)")
+    ap.add_argument("--out", default=None, help="output folder (default data/processed)")
     args = ap.parse_args()
+    out = Path(args.out).resolve() if args.out else OUT
+    print(f"Chunking: children {args.child_tokens} tok (overlap {args.overlap}), parents {args.parent_tokens} tok")
 
     count = get_counter(args.model)
     with MANIFEST.open(encoding="utf-8") as f:
@@ -111,13 +118,16 @@ def main() -> None:
     kept_once: set = set()
 
     # ---- pass 3: sections -> parents -> children --------------------------------------
-    OUT.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     stats = defaultdict(Counter)
-    with (OUT / "parents.jsonl").open("w", encoding="utf-8") as fp, \
-         (OUT / "chunks.jsonl").open("w", encoding="utf-8") as fc:
+    with (out / "parents.jsonl").open("w", encoding="utf-8") as fp, \
+         (out / "chunks.jsonl").open("w", encoding="utf-8") as fc:
         for doc_id, (d, blocks, n_pages) in extracted.items():
             doc_type = d["doc_type"]
             pub_date = find_publication_date(blocks)
+            lang = detect_language(" ".join(b.text for b in blocks if b.kind == "text"),
+                                   default=d["language"])
+            stats[doc_type]["english"] += lang == "en"
 
             clean = []
             for b in blocks:
@@ -146,7 +156,7 @@ def main() -> None:
             sections = split_sections(clean, family)
             n_children = 0
             for s_idx, section in enumerate(sections):
-                for p_idx, units in enumerate(make_parents(section, PARENT_TOKENS, count)):
+                for p_idx, units in enumerate(make_parents(section, args.parent_tokens, count)):
                     parent_id = f"{doc_id}::s{s_idx:03d}p{p_idx}"
                     parent_text = units_to_text(units)
                     title = section.title + (f" (suite {p_idx + 1})" if p_idx else "")
@@ -157,7 +167,10 @@ def main() -> None:
                     }, ensure_ascii=False) + "\n")
                     stats[doc_type]["parents"] += 1
 
-                    for kind, text in pack(units, CHILD_TOKENS, OVERLAP_TOKENS, count):
+                    for kind, text in pack(units, args.child_tokens, args.overlap, count):
+                        if low_quality_reason(text, kind):          # gibberish / empty / stray label
+                            stats[doc_type]["dropped"] += 1
+                            continue
                         context = f"{d['title']} | {title}"
                         chunk_key = f"{doc_id}::c{n_children:04d}"
                         fc.write(json.dumps({
@@ -177,7 +190,7 @@ def main() -> None:
                             "source_url": d["source_url"],
                             "publication_date": pub_date,
                             "country": d["country"],
-                            "language": d["language"],
+                            "language": detect_language(text, default=lang),   # per chunk: mixed docs exist
                             "is_synthetic": d["is_synthetic"] == "True",
                             "chunk_index": n_children,
                             "n_tokens": count(text),
@@ -204,7 +217,9 @@ def main() -> None:
     print(f"\nTOTAL: {tot['docs']} docs -> {tot['parents']} parents -> {tot['chunks']} chunks "
           f"({tot['table_chunks']} tables), {tot['boilerplate_removed']} boilerplate blocks"
           f" + {tot['boilerplate_lines']} boilerplate lines removed")
-    print(f"Output: {(OUT / 'parents.jsonl').relative_to(ROOT)}, {(OUT / 'chunks.jsonl').relative_to(ROOT)}")
+    print(f"Quality: {tot['dropped']} low-quality chunks dropped, "
+          f"{tot['english']} documents detected as English")
+    print(f"Output: {out / 'parents.jsonl'}, {out / 'chunks.jsonl'}")
 
 
 if __name__ == "__main__":
