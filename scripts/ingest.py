@@ -1,9 +1,16 @@
 """Ingestion: chunks -> BGE-M3 (dense + sparse) -> Qdrant, documents & parents -> PostgreSQL.
 
-    python scripts/build_chunks.py           # 1. PDFs -> data/processed/*.jsonl
-    python scripts/ingest.py                 # 2. vectors + payload -> Qdrant, registry -> Postgres
-    python scripts/ingest.py --recreate      #    drop and rebuild the collection
-    python scripts/ingest.py --limit 200     #    quick test on the first 200 chunks
+Standalone: one command runs the whole pipeline.
+
+    python scripts/ingest.py                 # full pipeline (steps below run only when needed)
+    python scripts/ingest.py --recreate      # drop and rebuild the Qdrant collection
+    python scripts/ingest.py --rebuild       # force the chunking step again
+    python scripts/ingest.py --limit 200     # quick test on the first 200 chunks
+
+Steps:
+    0. no data/raw/docs/manifest.csv      -> scripts/download_orange_docs.py (PDFs + manifest)
+    1. chunks missing or older than input -> scripts/build_chunks.py (PDFs -> data/processed/*.jsonl)
+    2. BGE-M3 dense + sparse              -> Qdrant;  documents + parent chunks -> PostgreSQL
 
 Idempotent: point ids are deterministic UUIDs (uuid5 of doc_id + chunk number), so
 running it twice overwrites instead of duplicating.
@@ -14,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import time
 import warnings
@@ -40,6 +48,35 @@ EMBED_BATCH = 8              # texts per forward pass of the model (CPU friendly
 KEYWORD_FIELDS = ["doc_id", "doc_type", "category", "offer_line", "chunk_type",
                   "country", "language", "source"]
 PAYLOAD_DROP = {"embed_text", "id"}   # not needed in Qdrant (embed_text = context + text)
+
+
+def run_step(script: str) -> None:
+    """Runs another pipeline script with the same Python (venv) and stops on failure."""
+    print(f"\n>>> python scripts/{script}")
+    subprocess.run([sys.executable, str(ROOT / "scripts" / script)], check=True)
+
+
+def prepare_inputs(force_rebuild: bool) -> None:
+    """Makes sure the PDFs and the chunk files exist and are up to date."""
+    manifest = ROOT / "data" / "raw" / "docs" / "manifest.csv"
+    chunks = PROCESSED / "chunks.jsonl"
+    parents = PROCESSED / "parents.jsonl"
+    if not manifest.exists():
+        print("No corpus found: downloading the Orange documents first.")
+        run_step("download_orange_docs.py")
+        if not manifest.exists():
+            sys.exit("Download produced no manifest: check the network and data/raw/SOURCES.md")
+    code = [ROOT / "scripts" / "build_chunks.py",
+            *sorted((ROOT / "src" / "telixia" / "ingestion").glob("*.py"))]
+    newest_input = max(p.stat().st_mtime for p in [manifest, *code])
+    stale = (not chunks.exists() or not parents.exists()
+             or chunks.stat().st_mtime < newest_input)
+    if force_rebuild or stale:
+        reason = "forced" if force_rebuild else "chunks missing or older than the corpus/chunking code"
+        print(f"Building chunks ({reason}).")
+        run_step("build_chunks.py")
+    else:
+        print("Chunks are up to date (use --rebuild to force).")
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -161,8 +198,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--recreate", action="store_true", help="drop and rebuild the collection")
     ap.add_argument("--limit", type=int, default=0, help="only the first N chunks (test)")
+    ap.add_argument("--rebuild", action="store_true", help="force the chunking step")
     args = ap.parse_args()
 
+    prepare_inputs(args.rebuild)
     settings = get_settings()
     chunks = load_jsonl(PROCESSED / "chunks.jsonl")
     parents = load_jsonl(PROCESSED / "parents.jsonl")
