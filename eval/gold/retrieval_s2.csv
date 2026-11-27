@@ -1,11 +1,16 @@
-question;expected_title;expected_section;lang
-Quel est le prix mensuel de l'offre 4G Home 200 Go ?;(RC) 4G Home;Prix;fr
-Combien coûte le forfait 500 Go 5G+ pour un client qui a une offre Internet Orange ?;(RC) Forfait 500 Go 5G+;Prix;fr
-Le prix de la location de la Livebox est-il inclus dans l'offre Livebox Max ?;(RC) Offre Livebox Max;Prix;fr
-Le forfait 500 Go 5G+ est-il disponible sans engagement ?;(RC) Forfait 500 Go 5G+;Durée, renouvellement, résiliation;fr
-Y a-t-il des frais de résiliation pour la 4G Home ?;(RC) 4G Home;Durée, renouvellement, résiliation;fr
-Quelle est la durée d'engagement de l'offre Série Spéciale Livebox Fibre ?;(RC) Offre Série Spéciale Livebox Fibre;Durée, renouvellement, résiliation;fr
-Comment résilier l'option internet tranquillité 50 Mo ?;(CS) Option internet tranquillité 50 Mo et Option internet mobile 1Go;Article 6;fr
-What is the withdrawal period after the delivery of equipment bought remotely with an Orange subscription?;(CGA) Services Internet et Mobiles;Article 5;en
-How many days do I have to withdraw after ordering a phone change remotely?;(CS) Changement de mobile;Article 4;en
-What is the maximum 4G+ download speed on the 500 GB 5G+ plan?;(RC) Forfait 500 Go 5G+;Services et équipements;en
+question;expected_title;expected_section;lang;category
+Quel est le prix mensuel de l'offre 4G Home 200 Go ?;(RC) 4G Home;Prix;fr;paraphrase
+Combien coûte le forfait 500 Go 5G+ pour un client qui a une offre Internet Orange ?;(RC) Forfait 500 Go 5G+;Prix;fr;paraphrase
+Le prix de la location de la Livebox est-il inclus dans l'offre Livebox Max ?;(RC) Offre Livebox Max;Prix;fr;paraphrase
+Le forfait 500 Go 5G+ est-il disponible sans engagement ?;(RC) Forfait 500 Go 5G+;Durée, renouvellement, résiliation;fr;paraphrase
+Y a-t-il des frais de résiliation pour la 4G Home ?;(RC) 4G Home;Durée, renouvellement, résiliation;fr;paraphrase
+Quelle est la durée d'engagement de l'offre Série Spéciale Livebox Fibre ?;(RC) Offre Série Spéciale Livebox Fibre;Durée, renouvellement, résiliation;fr;paraphrase
+Comment résilier l'option internet tranquillité 50 Mo ?;(CS) Option internet tranquillité 50 Mo et Option internet mobile 1Go;Article 6;fr;paraphrase
+What is the withdrawal period after the delivery of equipment bought remotely with an Orange subscription?;(CGA) Services Internet et Mobiles;Article 5;en;paraphrase
+How many days do I have to withdraw after ordering a phone change remotely?;(CS) Changement de mobile;Article 4;en;paraphrase
+What is the maximum 4G+ download speed on the 500 GB 5G+ plan?;(RC) Forfait 500 Go 5G+;Services et équipements;en;paraphrase
+Le prix de la location Livebox est-il inclus dans l'offre Cheat_Code_Fibre_18_26 ?;(RC) Offre Cheat_Code_Fibre_18_26;Prix;fr;exact
+Quel est le montant des frais de construction pour un raccordement ADSL/VDSL2 avec la Livebox Up ?;(RC) Offre Livebox Up;Prix;fr;exact
+Quel est le prix de la Mobicarte Start 150Go ?;Tarifs des offres mobile et Open;Page 5;fr;exact
+Quel est le délai de rétractation de l'option FamilyWall Premium ?;(CS) Option FamilyWall Premium;Article 12;fr;exact
+Quel est le prix mensuel de l'offre Mon Optimale Internet ?;(RC) Offre Mixte Mon Optimale Internet;Prix;fr;exact
