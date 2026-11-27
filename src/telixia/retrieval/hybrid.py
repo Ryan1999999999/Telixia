@@ -56,6 +56,7 @@ class HybridRetriever:
         # the lexical lane is skipped (the dense lane is cross-lingual).
         self.corpus_language, self.lang_aware = corpus_language, lang_aware
         self.last_skipped: list[str] = []
+        self.last_scores: dict[str, dict[str, float]] = {}     # lane -> {id: raw score}
 
     def use_bm25(self, query: str) -> bool:
         return not self.lang_aware or detect_language(query, self.corpus_language) == self.corpus_language
@@ -70,6 +71,7 @@ class HybridRetriever:
         payloads: dict[str, dict] = {}
         rankings: dict[str, list[str]] = {}
         flt = qdrant_filter(where)
+        self.last_scores = {}
 
         if any(lane in lanes for lane in ("dense", "sparse")):
             t0 = time.perf_counter()
@@ -86,6 +88,7 @@ class HybridRetriever:
                                            query_filter=flt, limit=self.lane_limit, with_payload=True)
             timings[lane] = (time.perf_counter() - t0) * 1000
             rankings[lane] = [str(p.id) for p in res.points]
+            self.last_scores[lane] = {str(p.id): p.score for p in res.points}
             payloads.update({str(p.id): p.payload or {} for p in res.points})
 
         self.last_skipped = []
@@ -96,6 +99,7 @@ class HybridRetriever:
             hits = self.bm25.search(query, limit=self.lane_limit, where=where)
             timings["bm25"] = (time.perf_counter() - t0) * 1000
             rankings["bm25"] = [doc_id for doc_id, _ in hits]
+            self.last_scores["bm25"] = dict(hits)
             for doc_id, _ in hits:
                 payloads.setdefault(doc_id, self.bm25.payload(doc_id))
         return rankings, payloads, timings

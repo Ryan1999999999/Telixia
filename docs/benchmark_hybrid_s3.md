@@ -57,4 +57,16 @@ Recall@20 = candidate recall: is the answer among the 20 chunks handed to the re
 
 ## Reading
 
-_To complete: which lanes help, which RRF k, and why._
+**Why hybrid did not beat dense here.** BM25 matches exact words. On this corpus, the 64 RC summaries share the same template ("Duree, renouvellement, resiliation", "Prix", ...). The question words therefore appear in dozens of near-identical chunks, and BM25 cannot tell them apart. It often finds the right *document* but the wrong *section* (DocHit@5 70% vs Recall@5 40% for BM25 alone). It is also blind to English questions on a French corpus, hence the language-aware lane: BM25 is skipped when the question is not French.
+
+**Per category (15 questions):**
+- exact-term (5 questions: product names, codes, prices): dense MRR 0.90, every fusion 1.00. BM25 helps where the exact word matters.
+- paraphrase (10 questions): dense 0.80, fusions 0.65-0.77. BM25 adds noise on reworded questions.
+- overall: dense 0.83 vs rrf(dense + bm25 language-aware + sparse) 0.84.
+
+**Candidate recall:** Recall@20 = 100% for every mode. The right chunk is always in the top 20; the problem is its *order*, not its presence. That is the job of the reranker (see `benchmark_rerank_s3.md`).
+
+**Latency:** BM25 1-3 ms, BGE-M3 sparse 6-20 ms, RRF 0.1 ms. Fusion is almost free.
+
+**Decision at this stage:** 3-lane language-aware RRF (k=60), top 20 handed to the reranker.
+**Update after the reranking benchmark:** once a cross-encoder is added, dense alone gives as good or better candidates. The live pipeline uses dense, and the BM25 / sparse lanes stay available (`RETRIEVAL_LANES`) for exact-term queries.
